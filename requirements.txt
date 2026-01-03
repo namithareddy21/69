@@ -1,6 +1,4 @@
-Flask
-numpy
-opencv-python-headless
-onnxruntime
-ultralytics
-gunicorn
+flask==2.3.5
+numpy==1.26.0
+opencv-python==4.9.0.76
+onnxruntime==1.17.0
