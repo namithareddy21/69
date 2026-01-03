@@ -6,7 +6,7 @@ from ultralytics import YOLO
 
 app = Flask(__name__)
 
-# Load YOLOv8 LVIS model (1200+ classes)
+# Force model download at startup
 model = YOLO("yolov8l-lvis.pt")
 
 @app.route("/")
@@ -17,7 +17,6 @@ def index():
 def detect():
     data = request.json["image"]
 
-    # Decode base64 image
     img_data = base64.b64decode(data.split(",")[1])
     np_arr = np.frombuffer(img_data, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
