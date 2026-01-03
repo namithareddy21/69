@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>600+ Class Object Detection</title>
+    <style>
+        body { background:#0f172a; color:white; text-align:center; }
+        canvas { border:3px solid #22c55e; }
+    </style>
+</head>
+<body>
+
+<h2>Real-Time Object Detection (600+ Classes)</h2>
+
+<video id="video" autoplay width="640" height="480"></video>
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+navigator.mediaDevices.getUserMedia({ video: true })
+.then(stream => video.srcObject = stream);
+
+setInterval(async () => {
+    ctx.drawImage(video, 0, 0, 640, 480);
+    const img = canvas.toDataURL("image/jpeg");
+
+    const res = await fetch("/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: img })
+    });
+
+    const data = await res.json();
+
+    data.detections.forEach(obj => {
+        const [x1,y1,x2,y2] = obj.box;
+        ctx.strokeStyle = "lime";
+        ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+        ctx.fillText(
+            `${obj.label} ${obj.width}x${obj.height}px`,
+            x1, y1-5
+        );
+    });
+}, 1000);
+</script>
+
+</body>
+</html>
