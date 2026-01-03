@@ -1,215 +1,155 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>YOLOv8 Real-time Detection</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin: 20px;
-            background: #f0f2f5;
-        }
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-        }
-        #video, #canvas {
-            border: 2px solid #333;
-            margin-top: 10px;
-            border-radius: 8px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        }
-        #controls {
-            margin-top: 20px;
-        }
-        button {
-            padding: 10px 20px;
-            margin: 0 10px;
-            font-size: 16px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            background: #4CAF50;
-            color: white;
-            transition: 0.3s;
-        }
-        button:hover { opacity: 0.8; }
-        button.stop {
-            background: #f44336;
-        }
-        #counts {
-            margin-top: 20px;
-            text-align: left;
-            display: inline-block;
-            background: #fff;
-            padding: 10px;
-            border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-        }
-        table {
-            border-collapse: collapse;
-            width: 300px;
-        }
-        th, td {
-            border: 1px solid #ccc;
-            padding: 5px;
-            text-align: left;
-        }
-        th { 
-            background: #4CAF50; 
-            color: white; 
-        }
-    </style>
+<meta charset="UTF-8">
+<title>YOLOv8 Real-Time Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+
+<style>
+body { font-family:'Roboto', sans-serif; background:linear-gradient(to right,#e0eafc,#cfdef3); text-align:center; margin:0; padding:0; color:#333;}
+h1 { margin:20px 0; font-size:2.5em; font-weight:700; color:#1b3a57; text-shadow:1px 1px 2px rgba(0,0,0,0.2); }
+.btn { padding:12px 25px; font-size:16px; margin:10px; border:none; border-radius:8px; cursor:pointer; box-shadow:0 4px 8px rgba(0,0,0,0.2); font-weight:500; transition:0.3s;}
+.btn.start {background:#4CAF50; color:white;} .btn.start:hover {background:#45a049;}
+.btn.stop {background:#f44336; color:white;} .btn.stop:hover {background:#d32f2f;}
+.container { display:flex; justify-content:center; gap:30px; margin-top:20px; flex-wrap:wrap;}
+.video-card { background:#fff; border-radius:12px; padding:15px; box-shadow:0 6px 15px rgba(0,0,0,0.2); flex:1 1 300px;}
+.video-card h3 {margin-top:0; font-size:1.2em; font-weight:500; color:#1b3a57;}
+canvas { border-radius:8px; width:100%; max-width:640px; height:auto; border:2px solid #1b3a57; box-shadow:0 4px 10px rgba(0,0,0,0.3);}
+#counts {margin:30px auto; background:#fff; padding:20px; border-radius:12px; width:fit-content; box-shadow:0 6px 15px rgba(0,0,0,0.2); text-align:left;}
+#counts h3 {margin-top:0;color:#1b3a57; font-weight:500;}
+table { border-collapse:collapse; width:100%; margin-top:10px;}
+th, td { border:1px solid #ddd; padding:8px; text-align:left;}
+th { background:#1b3a57; color:white;}
+tr:nth-child(even){background:#f9f9f9;}
+tr:hover {background:#f1f1f1;}
+</style>
 </head>
 <body>
-    <h1>YOLOv8 Real-time Object Detection</h1>
 
-    <div id="controls">
-        <button id="start-btn">Start Detection</button>
-        <button id="stop-btn" class="stop" disabled>Stop Detection</button>
+<h1>YOLOv8 Real-Time Object Detection</h1>
+<div>
+    <button class="btn start" onclick="startDetection()">Start Detection</button>
+    <button class="btn stop" onclick="stopDetection()">Stop Detection</button>
+</div>
+
+<div class="container">
+    <div class="video-card">
+        <h3>Camera Input</h3>
+        <canvas id="inputCanvas" width="640" height="480"></canvas>
     </div>
-
-    <div>
-        <video id="video" width="640" height="480" autoplay muted style="display:none;"></video>
-        <canvas id="canvas" width="640" height="480"></canvas>
+    <div class="video-card">
+        <h3>Detection Output</h3>
+        <canvas id="outputCanvas" width="640" height="480"></canvas>
     </div>
+</div>
 
-    <div id="counts">
-        <h3>Object Counts:</h3>
-        <table id="count-table">
-            <thead>
-                <tr><th>Object</th><th>Count</th></tr>
-            </thead>
-            <tbody></tbody>
-        </table>
-    </div>
+<div id="counts">
+    <h3>Object Counts</h3>
+    <table id="countTable">
+        <thead>
+            <tr><th>Object</th><th>Count</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
 
-    <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const startBtn = document.getElementById('start-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const countTableBody = document.querySelector('#count-table tbody');
+<video id="video" autoplay muted playsinline style="display:none"></video>
 
-        let stream = null;
-        let lastPredictions = [];
-        let FRAME_INTERVAL = 3;
-        let frameCount = 0;
-        let detecting = false;
+<script>
+const video = document.getElementById("video");
+const inputCanvas = document.getElementById("inputCanvas");
+const outputCanvas = document.getElementById("outputCanvas");
+const inCtx = inputCanvas.getContext("2d");
+const outCtx = outputCanvas.getContext("2d");
+const countTableBody = document.querySelector("#countTable tbody");
 
-        // Color palette for overlays
-        const colors = ['rgba(255,0,0,0.3)','rgba(0,255,0,0.3)','rgba(0,0,255,0.3)','rgba(255,255,0,0.3)','rgba(255,0,255,0.3)','rgba(0,255,255,0.3)'];
+let stream, predictions=[], detecting=false;
 
-        async function startDetection() {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-                video.style.display = 'block';
-                detecting = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                detectFrame();
-            } catch (err) {
-                alert("Webcam not available: " + err);
-            }
-        }
+// ---------- Start ----------
+async function startDetection(){
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({video:true});
+        video.srcObject = stream;
+        detecting=true;
+        loop();
+    } catch(err){ alert("Webcam not available: "+err); }
+}
 
-        function stopDetection() {
-            detecting = false;
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            video.style.display = 'none';
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            lastPredictions = [];
-            countTableBody.innerHTML = '';
-        }
+// ---------- Stop ----------
+function stopDetection(){
+    detecting=false;
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    predictions=[];
+    inCtx.clearRect(0,0,inputCanvas.width,inputCanvas.height);
+    outCtx.clearRect(0,0,outputCanvas.width,outputCanvas.height);
+    countTableBody.innerHTML='';
+}
 
-        async function detectFrame() {
-            if (!detecting) return;
+// ---------- Main Loop ----------
+async function loop(){
+    if(!detecting) return;
 
-            frameCount++;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    inCtx.drawImage(video,0,0,inputCanvas.width,inputCanvas.height);
 
-            if (frameCount % FRAME_INTERVAL === 0) {
-                canvas.toBlob(async (blob) => {
-                    const formData = new FormData();
-                    formData.append('image', blob, 'frame.jpg');
+    inputCanvas.toBlob(async blob=>{
+        const fd=new FormData();
+        fd.append("image",blob);
+        try{
+            const res = await fetch("/detect",{method:"POST",body:fd});
+            const data = await res.json();
+            predictions = data.objects || [];
 
-                    try {
-                        const response = await fetch('/detect', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await response.json();
-                        if (data.objects) {
-                            lastPredictions = data.objects;
-                            updateCounts(data.objects);
-                        }
-                    } catch (err) {
-                        console.error("Detection error:", err);
-                    }
-                }, 'image/jpeg');
-            }
-
-            // Draw predictions with overlay
-            if (lastPredictions.length > 0) {
-                lastPredictions.forEach((obj, idx) => {
-                    const [x1, y1, x2, y2] = obj.box;
-                    const label = obj.label;
-                    const conf = obj.confidence.toFixed(2);
-                    const width = obj.width_px;
-                    const height = obj.height_px;
-
-                    // Draw semi-transparent overlay
-                    ctx.fillStyle = colors[idx % colors.length];
-                    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-
-                    // Draw bounding box
-                    ctx.strokeStyle = '#00FF00';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-                    // Draw label background
-                    ctx.fillStyle = '#00FF00';
-                    ctx.font = '16px Arial';
-                    const text = `${label} ${conf}`;
-                    const textWidth = ctx.measureText(text).width;
-                    ctx.fillRect(x1 - 1, y1 - 20, textWidth + 6, 20);
-
-                    // Draw label text
-                    ctx.fillStyle = '#000';
-                    ctx.fillText(text, x1 + 2, y1 - 4);
-
-                    // Width x Height
-                    ctx.fillStyle = 'cyan';
-                    ctx.fillText(`${width}x${height}`, x1, y2 + 15);
-                });
-            }
-
-            requestAnimationFrame(detectFrame);
-        }
-
-        function updateCounts(objects) {
-            countTableBody.innerHTML = '';
-            const counts = {};
-            objects.forEach(obj => {
-                counts[obj.label] = (counts[obj.label] || 0) + 1;
+            // Pixel to cm conversion
+            predictions.forEach(obj=>{
+                obj.width_cm = (obj.width_px * 0.1).toFixed(1);
+                obj.height_cm = (obj.height_px * 0.1).toFixed(1);
             });
-            for (const [label, count] of Object.entries(counts)) {
-                const row = document.createElement('tr');
-                row.innerHTML = `<td>${label}</td><td>${count}</td>`;
-                countTableBody.appendChild(row);
-            }
-        }
 
-        startBtn.addEventListener('click', startDetection);
-        stopBtn.addEventListener('click', stopDetection);
-    </script>
+            updateCounts(predictions);
+        }catch(err){ console.error(err); }
+    });
+
+    outCtx.drawImage(video,0,0,outputCanvas.width,outputCanvas.height);
+    drawBoxes(predictions);
+
+    requestAnimationFrame(loop);
+}
+
+// ---------- Draw Boxes ----------
+function drawBoxes(objects){
+    objects.forEach(obj=>{
+        let [x1,y1,x2,y2] = obj.box;
+        const scaleX = outputCanvas.width / obj.image_width;
+        const scaleY = outputCanvas.height / obj.image_height;
+        x1*=scaleX; x2*=scaleX; y1*=scaleY; y2*=scaleY;
+        const boxWidth = x2-x1;
+        const boxHeight = y2-y1;
+
+        outCtx.strokeStyle="lime";
+        outCtx.lineWidth=2;
+        outCtx.strokeRect(x1,y1,boxWidth,boxHeight);
+
+        outCtx.fillStyle="lime";
+        outCtx.font="16px Roboto";
+        outCtx.fillText(`${obj.label} ${obj.confidence.toFixed(2)}`,x1,y1-20);
+
+        outCtx.fillStyle="cyan";
+        outCtx.fillText(`${obj.width_cm} × ${obj.height_cm} cm`, x1, y2+18);
+    });
+}
+
+// ---------- Update Counts ----------
+function updateCounts(objects){
+    countTableBody.innerHTML='';
+    const counts={};
+    objects.forEach(o=>counts[o.label]=(counts[o.label]||0)+1);
+    for(const [label,count] of Object.entries(counts)){
+        const row=document.createElement('tr');
+        row.innerHTML=`<td>${label}</td><td>${count}</td>`;
+        countTableBody.appendChild(row);
+    }
+}
+</script>
+
 </body>
 </html>
-
