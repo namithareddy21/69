@@ -1,6 +1,4 @@
 flask
 opencv-python-headless
-ultralytics
 numpy
-torch
-torchvision
+onnxruntime
