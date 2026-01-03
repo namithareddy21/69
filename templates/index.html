@@ -1,204 +1,242 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>YOLOv8 Real-Time Detection</title>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLOv8 Real-time Object Detection</title>
+    <style>
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background: #f4f6f8;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
 
-<style>
-/* ---------- Global Styles ---------- */
-body { 
-    font-family:'Roboto', sans-serif; 
-    background: linear-gradient(to right,#e0eafc,#cfdef3); 
-    text-align:center; margin:0; padding:0; color:#333;
-}
-h1 { 
-    margin:20px 0; font-size:2.5em; font-weight:700; 
-    color:#1b3a57; text-shadow:1px 1px 2px rgba(0,0,0,0.2); 
-}
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
 
-/* ---------- Buttons ---------- */
-.btn { 
-    padding:12px 25px; font-size:16px; margin:10px; 
-    border:none; border-radius:8px; cursor:pointer; 
-    box-shadow:0 4px 8px rgba(0,0,0,0.2); font-weight:500; 
-    transition:0.3s;
-}
-.btn.start { background:#4CAF50; color:white; }
-.btn.start:hover { background:#45a049; }
-.btn.stop { background:#f44336; color:white; }
-.btn.stop:hover { background:#d32f2f; }
+        #container {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
 
-/* ---------- Layout ---------- */
-.container { 
-    display:flex; justify-content:center; gap:30px; 
-    margin-top:20px; flex-wrap:wrap;
-}
-.video-card { 
-    background:#fff; border-radius:12px; padding:15px; 
-    box-shadow:0 6px 15px rgba(0,0,0,0.2); flex:1 1 300px;
-}
-.video-card h3 { 
-    margin-top:0; font-size:1.2em; font-weight:500; color:#1b3a57;
-}
-canvas { 
-    border-radius:8px; width:100%; max-width:640px; height:auto; 
-    border:2px solid #1b3a57; box-shadow:0 4px 10px rgba(0,0,0,0.3);
-}
+        #video-container {
+            position: relative;
+        }
 
-/* ---------- Counts Table ---------- */
-#counts { 
-    margin:30px auto; background:#fff; padding:20px; 
-    border-radius:12px; width:fit-content; 
-    box-shadow:0 6px 15px rgba(0,0,0,0.2); text-align:left;
-}
-#counts h3 { margin-top:0;color:#1b3a57; font-weight:500; }
-table { border-collapse:collapse; width:100%; margin-top:10px; }
-th, td { border:1px solid #ddd; padding:8px; text-align:left; }
-th { background:#1b3a57; color:white; }
-tr:nth-child(even){ background:#f9f9f9; }
-tr:hover { background:#f1f1f1; }
-</style>
+        canvas {
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+
+        #controls {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 25px;
+            font-size: 16px;
+            margin: 0 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            transition: 0.3s;
+        }
+
+        button:hover { opacity: 0.85; }
+        button.stop { background: #f44336; }
+
+        #counts {
+            background: #fff;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            min-width: 200px;
+            height: fit-content;
+        }
+
+        #counts h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            text-align: center;
+            color: #4CAF50;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        th {
+            background: #4CAF50;
+            color: white;
+        }
+    </style>
 </head>
 <body>
 
-<h1>YOLOv8 Real-Time Object Detection</h1>
-<div>
-    <button class="btn start" onclick="startDetection()">Start Detection</button>
-    <button class="btn stop" onclick="stopDetection()">Stop Detection</button>
-</div>
+    <h1>YOLOv8 Real-time Object Detection</h1>
 
-<div class="container">
-    <div class="video-card">
-        <h3>Camera Input</h3>
-        <canvas id="inputCanvas" width="640" height="480"></canvas>
+    <div id="controls">
+        <button id="start-btn">Start Detection</button>
+        <button id="stop-btn" class="stop" disabled>Stop Detection</button>
     </div>
-    <div class="video-card">
-        <h3>Detection Output</h3>
-        <canvas id="outputCanvas" width="640" height="480"></canvas>
+
+    <div id="container">
+        <div id="video-container">
+            <video id="video" autoplay muted playsinline style="display:none;"></video>
+            <canvas id="outputCanvas"></canvas>
+        </div>
+
+        <div id="counts">
+            <h3>Object Counts</h3>
+            <table id="countTable">
+                <thead>
+                    <tr><th>Object</th><th>Count</th></tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
     </div>
-</div>
 
-<div id="counts">
-    <h3>Object Counts</h3>
-    <table id="countTable">
-        <thead>
-            <tr><th>Object</th><th>Count</th></tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-</div>
+    <script>
+        const video = document.getElementById("video");
+        const outputCanvas = document.getElementById("outputCanvas");
+        const outCtx = outputCanvas.getContext("2d");
+        const startBtn = document.getElementById("start-btn");
+        const stopBtn = document.getElementById("stop-btn");
+        const countTableBody = document.querySelector("#countTable tbody");
 
-<video id="video" autoplay muted playsinline style="display:none"></video>
+        let stream, predictions = [], detecting = false;
 
-<script>
-const video = document.getElementById("video");
-const inputCanvas = document.getElementById("inputCanvas");
-const outputCanvas = document.getElementById("outputCanvas");
-const inCtx = inputCanvas.getContext("2d");
-const outCtx = outputCanvas.getContext("2d");
-const countTableBody = document.querySelector("#countTable tbody");
+        async function startDetection() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
 
-let stream, predictions=[], detecting=false;
+                video.addEventListener("loadedmetadata", () => {
+                    outputCanvas.width = video.videoWidth;
+                    outputCanvas.height = video.videoHeight;
+                    video.play();
+                    detecting = true;
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    loop();
+                });
 
-// ---------- Start ----------
-async function startDetection(){
-    try {
-        stream = await navigator.mediaDevices.getUserMedia({video:true});
-        video.srcObject = stream;
-        detecting=true;
-        loop();
-    } catch(err){ alert("Webcam not available: "+err); }
-}
+            } catch (err) {
+                alert("Webcam not available: " + err);
+                console.error(err);
+            }
+        }
 
-// ---------- Stop ----------
-function stopDetection(){
-    detecting=false;
-    if(stream) stream.getTracks().forEach(t=>t.stop());
-    predictions=[];
-    inCtx.clearRect(0,0,inputCanvas.width,inputCanvas.height);
-    outCtx.clearRect(0,0,outputCanvas.width,outputCanvas.height);
-    countTableBody.innerHTML='';
-}
+        function stopDetection() {
+            detecting = false;
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            predictions = [];
+            outCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            countTableBody.innerHTML = '';
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
 
-// ---------- Main Loop ----------
-async function loop(){
-    if(!detecting) return;
+        async function loop() {
+            if (!detecting) return;
 
-    inCtx.drawImage(video,0,0,inputCanvas.width,inputCanvas.height);
+            if(video.readyState >= 2){
+                outCtx.drawImage(video, 0, 0, outputCanvas.width, outputCanvas.height);
 
-    inputCanvas.toBlob(async blob=>{
-        const fd=new FormData();
-        fd.append("image",blob);
-        try{
-            const res = await fetch("/detect",{method:"POST",body:fd});
-            const data = await res.json();
-            predictions = data.objects || [];
+                // Send frame every loop
+                outputCanvas.toBlob(async blob => {
+                    const fd = new FormData();
+                    fd.append("image", blob);
 
-            // Pixel to cm conversion
-            predictions.forEach(obj=>{
-                obj.width_cm = (obj.width_px * 0.1).toFixed(1);
-                obj.height_cm = (obj.height_px * 0.1).toFixed(1);
+                    try {
+                        const res = await fetch("/detect", { method: "POST", body: fd });
+                        const data = await res.json();
+                        predictions = data.objects || [];
+
+                        predictions.forEach(obj => {
+                            obj.width_cm = (obj.width_px * 0.1).toFixed(1);
+                            obj.height_cm = (obj.height_px * 0.1).toFixed(1);
+                        });
+
+                        updateCounts(predictions);
+                        drawBoxes(predictions);
+
+                    } catch (err) {
+                        console.error("Detection error:", err);
+                    }
+                }, "image/jpeg");
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        function drawBoxes(objects) {
+            objects.forEach(obj => {
+                let [x1, y1, x2, y2] = obj.box;
+                const scaleX = outputCanvas.width / obj.image_width;
+                const scaleY = outputCanvas.height / obj.image_height;
+                x1 *= scaleX; x2 *= scaleX; y1 *= scaleY; y2 *= scaleY;
+                const boxWidth = x2 - x1;
+                const boxHeight = y2 - y1;
+
+                let color = "green";
+                const personClasses = ["person"];
+                const vehicleClasses = ["bicycle","car","motorcycle","bus","truck","train","boat"];
+                const animalClasses = ["bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe"];
+
+                if (personClasses.includes(obj.label)) color = "red";
+                else if (vehicleClasses.includes(obj.label)) color = "blue";
+                else if (animalClasses.includes(obj.label)) color = "orange";
+
+                // Draw box
+                outCtx.strokeStyle = color;
+                outCtx.lineWidth = 2;
+                outCtx.strokeRect(x1, y1, boxWidth, boxHeight);
+
+                // Draw label
+                outCtx.fillStyle = color;
+                outCtx.font = "16px Roboto";
+                outCtx.fillText(`${obj.label} ${obj.confidence.toFixed(2)}`, x1, y1 - 20);
+
+                // Dimensions
+                outCtx.fillStyle = "cyan";
+                outCtx.fillText(`${obj.width_cm} × ${obj.height_cm} cm`, x1, y2 + 18);
             });
+        }
 
-            updateCounts(predictions);
-        }catch(err){ console.error(err); }
-    });
+        function updateCounts(objects) {
+            countTableBody.innerHTML = '';
+            const counts = {};
+            objects.forEach(o => counts[o.label] = (counts[o.label] || 0) + 1);
+            for (const [label, count] of Object.entries(counts)) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${label}</td><td>${count}</td>`;
+                countTableBody.appendChild(row);
+            }
+        }
 
-    outCtx.drawImage(video,0,0,outputCanvas.width,outputCanvas.height);
-    drawBoxes(predictions);
-
-    requestAnimationFrame(loop);
-}
-
-// ---------- Draw Boxes with Color Coding ----------
-function drawBoxes(objects){
-    objects.forEach(obj=>{
-        let [x1,y1,x2,y2] = obj.box;
-        const scaleX = outputCanvas.width / obj.image_width;
-        const scaleY = outputCanvas.height / obj.image_height;
-        x1*=scaleX; x2*=scaleX; y1*=scaleY; y2*=scaleY;
-        const boxWidth = x2-x1;
-        const boxHeight = y2-y1;
-
-        // Color coding
-        let color = "green"; // default
-        const personClasses = ["person"];
-        const vehicleClasses = ["bicycle","car","motorcycle","bus","truck","train","boat"];
-        const animalClasses = ["bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe"];
-
-        if(personClasses.includes(obj.label)) color = "red";
-        else if(vehicleClasses.includes(obj.label)) color = "blue";
-        else if(animalClasses.includes(obj.label)) color = "orange";
-
-        // Draw box
-        outCtx.strokeStyle=color;
-        outCtx.lineWidth=2;
-        outCtx.strokeRect(x1,y1,boxWidth,boxHeight);
-
-        // Label + confidence
-        outCtx.fillStyle=color;
-        outCtx.font="16px Roboto";
-        outCtx.fillText(`${obj.label} ${obj.confidence.toFixed(2)}`,x1,y1-20);
-
-        // Dimensions in cm
-        outCtx.fillStyle="cyan";
-        outCtx.fillText(`${obj.width_cm} × ${obj.height_cm} cm`, x1, y2+18);
-    });
-}
-
-// ---------- Update Counts ----------
-function updateCounts(objects){
-    countTableBody.innerHTML='';
-    const counts={};
-    objects.forEach(o=>counts[o.label]=(counts[o.label]||0)+1);
-    for(const [label,count] of Object.entries(counts)){
-        const row=document.createElement('tr');
-        row.innerHTML=`<td>${label}</td><td>${count}</td>`;
-        countTableBody.appendChild(row);
-    }
-}
-</script>
+        startBtn.addEventListener('click', startDetection);
+        stopBtn.addEventListener('click', stopDetection);
+    </script>
 
 </body>
 </html>
