@@ -6,22 +6,58 @@
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 
 <style>
-body { font-family:'Roboto', sans-serif; background:linear-gradient(to right,#e0eafc,#cfdef3); text-align:center; margin:0; padding:0; color:#333;}
-h1 { margin:20px 0; font-size:2.5em; font-weight:700; color:#1b3a57; text-shadow:1px 1px 2px rgba(0,0,0,0.2); }
-.btn { padding:12px 25px; font-size:16px; margin:10px; border:none; border-radius:8px; cursor:pointer; box-shadow:0 4px 8px rgba(0,0,0,0.2); font-weight:500; transition:0.3s;}
-.btn.start {background:#4CAF50; color:white;} .btn.start:hover {background:#45a049;}
-.btn.stop {background:#f44336; color:white;} .btn.stop:hover {background:#d32f2f;}
-.container { display:flex; justify-content:center; gap:30px; margin-top:20px; flex-wrap:wrap;}
-.video-card { background:#fff; border-radius:12px; padding:15px; box-shadow:0 6px 15px rgba(0,0,0,0.2); flex:1 1 300px;}
-.video-card h3 {margin-top:0; font-size:1.2em; font-weight:500; color:#1b3a57;}
-canvas { border-radius:8px; width:100%; max-width:640px; height:auto; border:2px solid #1b3a57; box-shadow:0 4px 10px rgba(0,0,0,0.3);}
-#counts {margin:30px auto; background:#fff; padding:20px; border-radius:12px; width:fit-content; box-shadow:0 6px 15px rgba(0,0,0,0.2); text-align:left;}
-#counts h3 {margin-top:0;color:#1b3a57; font-weight:500;}
-table { border-collapse:collapse; width:100%; margin-top:10px;}
-th, td { border:1px solid #ddd; padding:8px; text-align:left;}
-th { background:#1b3a57; color:white;}
-tr:nth-child(even){background:#f9f9f9;}
-tr:hover {background:#f1f1f1;}
+/* ---------- Global Styles ---------- */
+body { 
+    font-family:'Roboto', sans-serif; 
+    background: linear-gradient(to right,#e0eafc,#cfdef3); 
+    text-align:center; margin:0; padding:0; color:#333;
+}
+h1 { 
+    margin:20px 0; font-size:2.5em; font-weight:700; 
+    color:#1b3a57; text-shadow:1px 1px 2px rgba(0,0,0,0.2); 
+}
+
+/* ---------- Buttons ---------- */
+.btn { 
+    padding:12px 25px; font-size:16px; margin:10px; 
+    border:none; border-radius:8px; cursor:pointer; 
+    box-shadow:0 4px 8px rgba(0,0,0,0.2); font-weight:500; 
+    transition:0.3s;
+}
+.btn.start { background:#4CAF50; color:white; }
+.btn.start:hover { background:#45a049; }
+.btn.stop { background:#f44336; color:white; }
+.btn.stop:hover { background:#d32f2f; }
+
+/* ---------- Layout ---------- */
+.container { 
+    display:flex; justify-content:center; gap:30px; 
+    margin-top:20px; flex-wrap:wrap;
+}
+.video-card { 
+    background:#fff; border-radius:12px; padding:15px; 
+    box-shadow:0 6px 15px rgba(0,0,0,0.2); flex:1 1 300px;
+}
+.video-card h3 { 
+    margin-top:0; font-size:1.2em; font-weight:500; color:#1b3a57;
+}
+canvas { 
+    border-radius:8px; width:100%; max-width:640px; height:auto; 
+    border:2px solid #1b3a57; box-shadow:0 4px 10px rgba(0,0,0,0.3);
+}
+
+/* ---------- Counts Table ---------- */
+#counts { 
+    margin:30px auto; background:#fff; padding:20px; 
+    border-radius:12px; width:fit-content; 
+    box-shadow:0 6px 15px rgba(0,0,0,0.2); text-align:left;
+}
+#counts h3 { margin-top:0;color:#1b3a57; font-weight:500; }
+table { border-collapse:collapse; width:100%; margin-top:10px; }
+th, td { border:1px solid #ddd; padding:8px; text-align:left; }
+th { background:#1b3a57; color:white; }
+tr:nth-child(even){ background:#f9f9f9; }
+tr:hover { background:#f1f1f1; }
 </style>
 </head>
 <body>
@@ -115,7 +151,7 @@ async function loop(){
     requestAnimationFrame(loop);
 }
 
-// ---------- Draw Boxes ----------
+// ---------- Draw Boxes with Color Coding ----------
 function drawBoxes(objects){
     objects.forEach(obj=>{
         let [x1,y1,x2,y2] = obj.box;
@@ -125,14 +161,27 @@ function drawBoxes(objects){
         const boxWidth = x2-x1;
         const boxHeight = y2-y1;
 
-        outCtx.strokeStyle="lime";
+        // Color coding
+        let color = "green"; // default
+        const personClasses = ["person"];
+        const vehicleClasses = ["bicycle","car","motorcycle","bus","truck","train","boat"];
+        const animalClasses = ["bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe"];
+
+        if(personClasses.includes(obj.label)) color = "red";
+        else if(vehicleClasses.includes(obj.label)) color = "blue";
+        else if(animalClasses.includes(obj.label)) color = "orange";
+
+        // Draw box
+        outCtx.strokeStyle=color;
         outCtx.lineWidth=2;
         outCtx.strokeRect(x1,y1,boxWidth,boxHeight);
 
-        outCtx.fillStyle="lime";
+        // Label + confidence
+        outCtx.fillStyle=color;
         outCtx.font="16px Roboto";
         outCtx.fillText(`${obj.label} ${obj.confidence.toFixed(2)}`,x1,y1-20);
 
+        // Dimensions in cm
         outCtx.fillStyle="cyan";
         outCtx.fillText(`${obj.width_cm} × ${obj.height_cm} cm`, x1, y2+18);
     });
