@@ -1,4 +1,6 @@
-flask
-opencv-python-headless
+Flask
 numpy
+opencv-python-headless
 onnxruntime
+ultralytics
+gunicorn
