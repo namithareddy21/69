@@ -1,50 +1,215 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>600+ Class Object Detection</title>
+    <meta charset="UTF-8">
+    <title>YOLOv8 Real-time Detection</title>
     <style>
-        body { background:#0f172a; color:white; text-align:center; }
-        canvas { border:3px solid #22c55e; }
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 20px;
+            background: #f0f2f5;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        #video, #canvas {
+            border: 2px solid #333;
+            margin-top: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        #controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            transition: 0.3s;
+        }
+        button:hover { opacity: 0.8; }
+        button.stop {
+            background: #f44336;
+        }
+        #counts {
+            margin-top: 20px;
+            text-align: left;
+            display: inline-block;
+            background: #fff;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+        table {
+            border-collapse: collapse;
+            width: 300px;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 5px;
+            text-align: left;
+        }
+        th { 
+            background: #4CAF50; 
+            color: white; 
+        }
     </style>
 </head>
 <body>
+    <h1>YOLOv8 Real-time Object Detection</h1>
 
-<h2>Real-Time Object Detection (600+ Classes)</h2>
+    <div id="controls">
+        <button id="start-btn">Start Detection</button>
+        <button id="stop-btn" class="stop" disabled>Stop Detection</button>
+    </div>
 
-<video id="video" autoplay width="640" height="480"></video>
-<canvas id="canvas" width="640" height="480"></canvas>
+    <div>
+        <video id="video" width="640" height="480" autoplay muted style="display:none;"></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
 
-<script>
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+    <div id="counts">
+        <h3>Object Counts:</h3>
+        <table id="count-table">
+            <thead>
+                <tr><th>Object</th><th>Count</th></tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
 
-navigator.mediaDevices.getUserMedia({ video: true })
-.then(stream => video.srcObject = stream);
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const countTableBody = document.querySelector('#count-table tbody');
 
-setInterval(async () => {
-    ctx.drawImage(video, 0, 0, 640, 480);
-    const img = canvas.toDataURL("image/jpeg");
+        let stream = null;
+        let lastPredictions = [];
+        let FRAME_INTERVAL = 3;
+        let frameCount = 0;
+        let detecting = false;
 
-    const res = await fetch("/detect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: img })
-    });
+        // Color palette for overlays
+        const colors = ['rgba(255,0,0,0.3)','rgba(0,255,0,0.3)','rgba(0,0,255,0.3)','rgba(255,255,0,0.3)','rgba(255,0,255,0.3)','rgba(0,255,255,0.3)'];
 
-    const data = await res.json();
+        async function startDetection() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                detecting = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                detectFrame();
+            } catch (err) {
+                alert("Webcam not available: " + err);
+            }
+        }
 
-    data.detections.forEach(obj => {
-        const [x1,y1,x2,y2] = obj.box;
-        ctx.strokeStyle = "lime";
-        ctx.strokeRect(x1,y1,x2-x1,y2-y1);
-        ctx.fillText(
-            `${obj.label} ${obj.width}x${obj.height}px`,
-            x1, y1-5
-        );
-    });
-}, 1000);
-</script>
+        function stopDetection() {
+            detecting = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            video.style.display = 'none';
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            lastPredictions = [];
+            countTableBody.innerHTML = '';
+        }
 
+        async function detectFrame() {
+            if (!detecting) return;
+
+            frameCount++;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            if (frameCount % FRAME_INTERVAL === 0) {
+                canvas.toBlob(async (blob) => {
+                    const formData = new FormData();
+                    formData.append('image', blob, 'frame.jpg');
+
+                    try {
+                        const response = await fetch('/detect', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (data.objects) {
+                            lastPredictions = data.objects;
+                            updateCounts(data.objects);
+                        }
+                    } catch (err) {
+                        console.error("Detection error:", err);
+                    }
+                }, 'image/jpeg');
+            }
+
+            // Draw predictions with overlay
+            if (lastPredictions.length > 0) {
+                lastPredictions.forEach((obj, idx) => {
+                    const [x1, y1, x2, y2] = obj.box;
+                    const label = obj.label;
+                    const conf = obj.confidence.toFixed(2);
+                    const width = obj.width_px;
+                    const height = obj.height_px;
+
+                    // Draw semi-transparent overlay
+                    ctx.fillStyle = colors[idx % colors.length];
+                    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+
+                    // Draw bounding box
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                    // Draw label background
+                    ctx.fillStyle = '#00FF00';
+                    ctx.font = '16px Arial';
+                    const text = `${label} ${conf}`;
+                    const textWidth = ctx.measureText(text).width;
+                    ctx.fillRect(x1 - 1, y1 - 20, textWidth + 6, 20);
+
+                    // Draw label text
+                    ctx.fillStyle = '#000';
+                    ctx.fillText(text, x1 + 2, y1 - 4);
+
+                    // Width x Height
+                    ctx.fillStyle = 'cyan';
+                    ctx.fillText(`${width}x${height}`, x1, y2 + 15);
+                });
+            }
+
+            requestAnimationFrame(detectFrame);
+        }
+
+        function updateCounts(objects) {
+            countTableBody.innerHTML = '';
+            const counts = {};
+            objects.forEach(obj => {
+                counts[obj.label] = (counts[obj.label] || 0) + 1;
+            });
+            for (const [label, count] of Object.entries(counts)) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${label}</td><td>${count}</td>`;
+                countTableBody.appendChild(row);
+            }
+        }
+
+        startBtn.addEventListener('click', startDetection);
+        stopBtn.addEventListener('click', stopDetection);
+    </script>
 </body>
 </html>
+
