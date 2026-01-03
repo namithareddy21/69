@@ -7,7 +7,7 @@ import os
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # ---- YOLOv8 ONNX loading ----
-MODEL_PATH = "yolov8n.onnx"  # ensure this file is uploaded
+MODEL_PATH = "yolov8n.onnx"
 session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
 input_name = session.get_inputs()[0].name
 output_name = session.get_outputs()[0].name
@@ -35,12 +35,12 @@ def nms(boxes, scores, score_thresh=0.25, iou_thresh=0.45):
 # ---- Routes ----
 @app.route("/")
 def index():
-    return render_template("index.html")  # serve frontend
+    return render_template("index.html")
 
 @app.route("/detect", methods=["POST"])
 def detect():
     if "image" not in request.files:
-        return jsonify({"count":0,"objects":[], "description":[]})
+        return jsonify({"count":0,"objects":[],"description":[]})
 
     file = request.files["image"]
     img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
@@ -82,7 +82,9 @@ def detect():
                 "confidence": round(confidences[i],2),
                 "box":[x,y,x+bw,y+bh],
                 "width_px": bw,
-                "height_px": bh
+                "height_px": bh,
+                "image_width": w,
+                "image_height": h
             })
             labels.append(label)
 
@@ -92,3 +94,4 @@ def detect():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
