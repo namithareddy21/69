@@ -4,24 +4,18 @@ import numpy as np
 import onnxruntime as ort
 import os
 import math
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 app = Flask(__name__)
 
 # ---------------------------
-# Load YOLOv8 ONNX model
+# Load YOLOv8 ONNX
 # ---------------------------
 MODEL_PATH = "yolov8n.onnx"
-
-session = ort.InferenceSession(
-    MODEL_PATH,
-    providers=["CPUExecutionProvider"]
-)
-
+session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
 input_name = session.get_inputs()[0].name
 output_name = session.get_outputs()[0].name
 
-# COCO classes
 CLASSES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
     "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
@@ -36,10 +30,10 @@ CLASSES = [
 ]
 
 # ---------------------------
-# Centroid Tracker
+# Centroid Tracker (PER CLASS)
 # ---------------------------
 class CentroidTracker:
-    def __init__(self, max_disappeared=5, max_distance=50):
+    def __init__(self, max_disappeared=8, max_distance=80):
         self.nextID = 0
         self.objects = OrderedDict()
         self.disappeared = OrderedDict()
@@ -57,46 +51,43 @@ class CentroidTracker:
 
     def update(self, detections):
         if len(detections) == 0:
-            for objectID in list(self.disappeared.keys()):
-                self.disappeared[objectID] += 1
-                if self.disappeared[objectID] > self.max_disappeared:
-                    self.deregister(objectID)
+            for oid in list(self.disappeared.keys()):
+                self.disappeared[oid] += 1
+                if self.disappeared[oid] > self.max_disappeared:
+                    self.deregister(oid)
             return self.objects
 
         input_centroids = []
-        for det in detections:
-            x1, y1, x2, y2 = det["box"]
-            cx = int((x1 + x2) / 2)
-            cy = int((y1 + y2) / 2)
-            input_centroids.append((cx, cy))
+        for d in detections:
+            x1,y1,x2,y2 = d["box"]
+            input_centroids.append(((x1+x2)//2, (y1+y2)//2))
 
         if len(self.objects) == 0:
-            for i, det in enumerate(detections):
-                self.register(input_centroids[i], det["label"], det["box"])
+            for i,d in enumerate(detections):
+                self.register(input_centroids[i], d["label"], d["box"])
         else:
             objectIDs = list(self.objects.keys())
-            objectCentroids = [self.objects[objID][0] for objID in objectIDs]
+            objectCentroids = [self.objects[i][0] for i in objectIDs]
 
-            for i, centroid in enumerate(input_centroids):
+            used = set()
+
+            for i,centroid in enumerate(input_centroids):
                 distances = [math.dist(centroid, oc) for oc in objectCentroids]
-                minDist = min(distances)
-                idx = distances.index(minDist)
+                idx = np.argmin(distances)
 
-                if minDist < self.max_distance:
-                    objectID = objectIDs[idx]
-                    self.objects[objectID] = (
-                        centroid,
-                        detections[i]["label"],
-                        detections[i]["box"]
-                    )
-                    self.disappeared[objectID] = 0
+                if distances[idx] < self.max_distance and idx not in used:
+                    oid = objectIDs[idx]
+                    self.objects[oid] = (centroid, detections[i]["label"], detections[i]["box"])
+                    self.disappeared[oid] = 0
+                    used.add(idx)
                 else:
                     self.register(centroid, detections[i]["label"], detections[i]["box"])
 
         return self.objects
 
 
-tracker = CentroidTracker()
+# ONE TRACKER PER CLASS (IMPORTANT)
+trackers = defaultdict(CentroidTracker)
 
 # ---------------------------
 # Routes
@@ -107,69 +98,72 @@ def index():
 
 @app.route("/detect", methods=["POST"])
 def detect():
-    if "image" not in request.files:
-        return jsonify({"objects": [], "counts": {}})
-
     img = cv2.imdecode(
         np.frombuffer(request.files["image"].read(), np.uint8),
         cv2.IMREAD_COLOR
     )
+    h,w = img.shape[:2]
 
-    h, w = img.shape[:2]
+    img_r = cv2.resize(img,(640,640))
+    img_r = cv2.cvtColor(img_r, cv2.COLOR_BGR2RGB)
+    img_r = img_r.astype(np.float32)/255.0
+    img_r = np.transpose(img_r,(2,0,1))[None]
 
-    # Preprocess
-    img_resized = cv2.resize(img, (640, 640))
-    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-    img_norm = img_rgb.astype(np.float32) / 255.0
-    img_input = np.transpose(img_norm, (2, 0, 1))[None, :, :, :]
+    preds = session.run([output_name], {input_name: img_r})[0]
+    preds = np.squeeze(preds).T
 
-    # Inference
-    outputs = session.run([output_name], {input_name: img_input})[0]
-    preds = np.squeeze(outputs).T
+    boxes, scores, labels = [], [], []
 
-    detections = []
+    for p in preds:
+        cls_scores = p[4:]
+        cls = np.argmax(cls_scores)
+        conf = cls_scores[cls]
 
-    for pred in preds:
-        scores = pred[4:]
-        class_id = np.argmax(scores)
-        confidence = scores[class_id]
+        if conf > 0.5:
+            cx,cy,bw,bh = p[:4]
+            x1 = int((cx-bw/2)*w/640)
+            y1 = int((cy-bh/2)*h/640)
+            bw = int(bw*w/640)
+            bh = int(bh*h/640)
 
-        if confidence > 0.5:
-            cx, cy, bw, bh = pred[:4]
+            boxes.append([x1,y1,bw,bh])
+            scores.append(float(conf))
+            labels.append(cls)
 
-            x1 = int((cx - bw / 2) * w / 640)
-            y1 = int((cy - bh / 2) * h / 640)
-            x2 = int((cx + bw / 2) * w / 640)
-            y2 = int((cy + bh / 2) * h / 640)
+    # 🔥 NMS (THIS FIXES COUNT EXPLOSION)
+    idxs = cv2.dnn.NMSBoxes(boxes, scores, 0.5, 0.4)
 
-            detections.append({
-                "label": CLASSES[class_id],
-                "box": [x1, y1, x2, y2]
+    detections_by_class = defaultdict(list)
+
+    if len(idxs) > 0:
+        for i in idxs.flatten():
+            x,y,bw,bh = boxes[i]
+            label = CLASSES[labels[i]]
+            detections_by_class[label].append({
+                "label": label,
+                "box": [x,y,x+bw,y+bh]
             })
-
-    tracked = tracker.update(detections)
 
     results = []
     counts = {}
 
-    for objectID, (_, label, box) in tracked.items():
-        counts[label] = counts.get(label, 0) + 1
-        results.append({
-            "id": objectID,
-            "label": label,
-            "box": box
-        })
+    for label,dets in detections_by_class.items():
+        tracked = trackers[label].update(dets)
+        counts[label] = len(tracked)
+
+        for oid,(_,_,box) in tracked.items():
+            results.append({
+                "id": oid,
+                "label": label,
+                "box": box
+            })
 
     return jsonify({
         "objects": results,
         "counts": counts
     })
 
-# ---------------------------
-# Run
-# ---------------------------
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
