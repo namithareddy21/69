@@ -2,30 +2,39 @@ from flask import Flask, render_template, request, jsonify
 import cv2
 import numpy as np
 import onnxruntime as ort
-import os  # <- ADD THIS
+import os
 from collections import Counter
 
 app = Flask(__name__)
 
 MODEL_PATH = 'yolov8n.onnx'
-if not os.path.exists(MODEL_PATH):
-    return jsonify(error="Model file yolov8n.onnx not found"), 404
 
-session = ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
-input_name = session.get_inputs()[0].name
-output_name = session.get_outputs()[0].name
+def load_session():
+    if not os.path.exists(MODEL_PATH):
+        # Just log; do NOT return here
+        print("Model file yolov8n.onnx not found")
+        return None
+    return ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
 
-CLASSES = [  # Full COCO classes list (unchanged)
-    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
-    'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
-    'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
-    'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-    'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
-    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
-    'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-    'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+session = load_session()
+if session is not None:
+    input_name = session.get_inputs()[0].name
+    output_name = session.get_outputs()[0].name
+else:
+    input_name = None
+    output_name = None
+
+CLASSES = [
+    'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+    'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+    'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+    'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+    'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+    'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+    'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake',
+    'chair','couch','potted plant','bed','dining table','toilet','tv','laptop',
+    'mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink',
+    'refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
 ]
 
 def nms(boxes, scores, score_thresh=0.4, iou_thresh=0.5):
@@ -35,47 +44,48 @@ def nms(boxes, scores, score_thresh=0.4, iou_thresh=0.5):
 
 @app.route('/')
 def index():
+    if session is None:
+        return "Model file yolov8n.onnx not found in server root.", 500
     return render_template('index.html')
 
 @app.route('/detect', methods=['POST'])
 def detect():
+    if session is None:
+        return jsonify(error="Model file yolov8n.onnx not found"), 500
+
     if 'image' not in request.files:
         return jsonify(count_per_class={}, objects=[], description=[])
-    
+
     file = request.files['image']
     nparr = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     orig_h, orig_w = img.shape[:2]
-    
-    # Preprocess to 640x640
+
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_norm = img_rgb.astype(np.float32) / 255.0
     img_input = np.transpose(img_norm, (2, 0, 1))[None, ...]
-    
-    # Inference
+
     outputs = session.run([output_name], {input_name: img_input})
     preds = np.squeeze(outputs[0].T)
-    
+
     boxes, confidences, classids = [], [], []
     for pred in preds:
         class_scores = pred[4:]
         classid = np.argmax(class_scores)
         confidence = class_scores[classid]
         if confidence > 0.4:
-            cx, cy, bw, bh = pred[0:4]
-            # Scale back to original image size
+            cx, cy, bw, bh = pred[:4]
             x1 = int((cx - bw / 2) * orig_w / 640)
             y1 = int((cy - bh / 2) * orig_h / 640)
             x2 = int((cx + bw / 2) * orig_w / 640)
             y2 = int((cy + bh / 2) * orig_h / 640)
-            boxes.append([x1, y1, x2 - x1, y2 - y1])  # x,y,w,h
+            boxes.append([x1, y1, x2 - x1, y2 - y1])
             confidences.append(float(confidence))
             classids.append(classid)
-    
+
     indices = nms(boxes, confidences)
-    results = []
-    labels = []
+    results, labels = [], []
     if len(indices) > 0:
         for i in indices.flatten():
             x1, y1, w, h = boxes[i]
@@ -88,7 +98,8 @@ def detect():
                 'height_px': h
             })
             labels.append(label)
-    
+
+    from collections import Counter
     count_per_class = dict(Counter(r['label'] for r in results))
     return jsonify(count_per_class=count_per_class, objects=results, description=list(set(labels)))
 
