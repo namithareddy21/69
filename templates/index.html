@@ -1,108 +1,102 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>Stable Object Detection</title>
-
-<style>
-body {
-    font-family: Arial;
-    background: #f4f9fb;
-    text-align: center;
-}
-button {
-    padding: 12px 25px;
-    background: #4caf50;
-    color: white;
-    border: none;
-    border-radius: 20px;
-    font-size: 16px;
-    cursor: pointer;
-}
-.container {
-    display: flex;
-    justify-content: center;
-    gap: 30px;
-}
-video, canvas {
-    width: 320px;
-    height: 240px;
-    border-radius: 10px;
-}
-#info {
-    margin-top: 20px;
-    font-size: 18px;
-}
-</style>
+    <meta charset="UTF-8">
+    <title>Real-Time Object Detection</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f9fb; text-align: center; }
+        h1 { margin: 20px; }
+        button { padding: 12px 25px; border: none; background: #6ec7a1; color: white; font-size: 16px; border-radius: 20px; cursor: pointer; margin: 10px; }
+        .container { display: flex; justify-content: center; gap: 40px; margin-top: 20px; }
+        .box { background: white; padding: 15px; border-radius: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        video, canvas { width: 320px; height: 240px; border-radius: 10px; }
+        #info { margin-top: 30px; font-size: 18px; background: #e8f5e8; padding: 15px; border-radius: 10px; }
+    </style>
 </head>
-
 <body>
+    <h1>REAL-TIME OBJECT DETECTION</h1>
+    <button onclick="startDetection()">Start Detection</button>
+    <button onclick="stopDetection()">Stop Detection</button>
+    
+    <div class="container">
+        <div class="box">
+            <h3>Input (Live Camera)</h3>
+            <video id="video" autoplay muted></video>
+        </div>
+        <div class="box">
+            <h3>Output (Detection)</h3>
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+    
+    <div id="info">
+        <p><b>Objects by Class:</b> <span id="counts">{}</span></p>
+        <p id="desc">No objects detected</p>
+    </div>
 
-<h1>Real-Time Object Detection (NO Flicker)</h1>
+    <script>
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let intervalId;
+        let prevObjects = [];  // For stable boxes
 
-<button onclick="startDetection()">Start</button>
-<button onclick="stopDetection()">Stop</button>
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => video.srcObject = stream);
 
-<div class="container">
-    <video id="video" autoplay muted></video>
-    <canvas id="canvas"></canvas>
-</div>
-
-<div id="info">No objects detected</div>
-
-<script>
-let video = document.getElementById("video");
-let canvas = document.getElementById("canvas");
-let ctx = canvas.getContext("2d");
-let interval;
-
-navigator.mediaDevices.getUserMedia({ video: true })
-.then(stream => video.srcObject = stream);
-
-function startDetection() {
-    interval = setInterval(sendFrame, 500);
-}
-
-function stopDetection() {
-    clearInterval(interval);
-}
-
-function sendFrame() {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-
-    canvas.toBlob(async blob => {
-        let fd = new FormData();
-        fd.append("image", blob);
-
-        let res = await fetch("/detect", {
-            method: "POST",
-            body: fd
-        });
-
-        let data = await res.json();
-
-        ctx.drawImage(video, 0, 0);
-
-        data.objects.forEach(obj => {
-            let [x1, y1, x2, y2] = obj.box;
-            ctx.strokeStyle = "lime";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-            ctx.fillStyle = "lime";
-            ctx.fillText(`${obj.label} #${obj.id}`, x1, y1 - 5);
-        });
-
-        let info = "";
-        for (let key in data.counts) {
-            info += `<b>${key}</b>: ${data.counts[key]}<br>`;
+        function startDetection() {
+            intervalId = setInterval(sendFrame, 200);  // 200ms for stability
         }
-        document.getElementById("info").innerHTML =
-            info || "No objects detected";
-    }, "image/jpeg");
-}
-</script>
 
+        function stopDetection() {
+            clearInterval(intervalId);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);  // Clear overlays
+            prevObjects = [];
+        }
+
+        async function sendFrame() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            canvas.toBlob(async (blob) => {
+                let formData = new FormData();
+                formData.append('image', blob, 'frame.jpg');
+                
+                let res = await fetch('/detect', { method: 'POST', body: formData });
+                let data = await res.json();
+                
+                // Update counts and desc
+                let countsSpan = document.getElementById('counts');
+                if (Object.keys(data.count_per_class || {}).length > 0) {
+                    countsSpan.innerText = JSON.stringify(data.count_per_class, null, 1);
+                    document.getElementById('desc').innerText = data.description.join(', ');
+                } else {
+                    countsSpan.innerText = '{}';
+                    document.getElementById('desc').innerText = 'No objects detected';
+                }
+                
+                // Stable drawing: overlay on live video with persistence
+                prevObjects = data.objects || [];
+                prevObjects.forEach(obj => {
+                    let [x1, y1, x2, y2] = obj.box;
+                    // Semi-transparent bg for stability
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
+                    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+                    // Border
+                    ctx.strokeStyle = 'lime';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                    // Label with dims
+                    ctx.fillStyle = 'lime';
+                    ctx.font = 'bold 16px Arial';
+                    ctx.fillText(
+                        `${obj.label} (${obj.confidence}) ${obj.width_px}x${obj.height_px}px`,
+                        x1, y1 - 5
+                    );
+                });
+            }, 'image/jpeg', 0.8);
+        }
+    </script>
 </body>
 </html>
