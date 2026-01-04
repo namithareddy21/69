@@ -1,7 +1,7 @@
-Flask
-numpy
+flask
 opencv-python-headless
+numpy
 onnxruntime
-ultralytics
 gunicorn
+
 
