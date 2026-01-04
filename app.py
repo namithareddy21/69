@@ -1,16 +1,15 @@
 from flask import Flask, render_template, request, jsonify
-import cv2
-import numpy as np
-import onnxruntime as ort
 import os
 from collections import Counter
 
-# Make template folder explicit (important on some deploys)
+import cv2
+import numpy as np
+import onnxruntime as ort
+
 app = Flask(__name__, template_folder="templates")
 
 MODEL_PATH = "yolov8n.onnx"
 
-# COCO-80 classes
 CLASSES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
     "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
@@ -26,44 +25,31 @@ CLASSES = [
 
 def load_session():
     if not os.path.exists(MODEL_PATH):
-        print(f"❌ Model not found: {MODEL_PATH} (must be in repo root)")
+        print("MODEL MISSING:", MODEL_PATH)
         return None, None, None
-    try:
-        sess = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-        in_name = sess.get_inputs()[0].name
-        out_name = sess.get_outputs()[0].name
-        print("✅ ONNX model loaded")
-        return sess, in_name, out_name
-    except Exception as e:
-        print(f"❌ Failed to load model: {e}")
-        return None, None, None
+    sess = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+    in_name = sess.get_inputs()[0].name
+    out_name = sess.get_outputs()[0].name
+    return sess, in_name, out_name
 
 session, input_name, output_name = load_session()
 
 def nms_xywh(boxes_xywh, scores, score_thresh=0.4, iou_thresh=0.5):
-    if len(boxes_xywh) == 0:
+    if not boxes_xywh:
         return np.array([], dtype=np.int32)
     idx = cv2.dnn.NMSBoxes(boxes_xywh, scores, score_thresh, iou_thresh)
     if idx is None or len(idx) == 0:
         return np.array([], dtype=np.int32)
     return idx.flatten()
 
-def clamp_box(x1, y1, x2, y2, w, h):
-    x1 = max(0, min(int(x1), w - 1))
-    y1 = max(0, min(int(y1), h - 1))
-    x2 = max(0, min(int(x2), w - 1))
-    y2 = max(0, min(int(y2), h - 1))
-    if x2 < x1:
-        x1, x2 = x2, x1
-    if y2 < y1:
-        y1, y2 = y2, y1
-    return x1, y1, x2, y2
+def clamp(v, lo, hi):
+    return max(lo, min(int(v), hi))
 
-@app.route("/ping")
+@app.get("/ping")
 def ping():
     return "pong"
 
-@app.route("/health")
+@app.get("/health")
 def health():
     return jsonify({
         "status": "ok",
@@ -71,15 +57,13 @@ def health():
         "model_path": MODEL_PATH
     })
 
-@app.route("/")
+@app.get("/")
 def index():
-    # If you see "Not Found" in browser, it usually means the wrong start command/app is running,
-    # but if the app is running and model is missing, show a clear message here.
     if session is None:
-        return "Model not loaded. Put yolov8n.onnx in repo root and redeploy.", 500
+        return "Upload yolov8n.onnx in repo root and redeploy.", 500
     return render_template("index.html")
 
-@app.route("/detect", methods=["POST"])
+@app.post("/detect")
 def detect():
     if session is None:
         return jsonify(error="Model not loaded"), 500
@@ -88,82 +72,95 @@ def detect():
         return jsonify(count_per_class={}, objects=[], description=[])
 
     file = request.files["image"]
-    data = file.read()
-    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    img_bytes = file.read()
+    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
 
     if img is None:
         return jsonify(error="Invalid image"), 400
 
     orig_h, orig_w = img.shape[:2]
 
-    # Preprocess
+    # preprocess -> 640x640 RGB, CHW, float32
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_norm = img_rgb.astype(np.float32) / 255.0
-    img_input = np.transpose(img_norm, (2, 0, 1))[None, ...]
+    img_input = np.transpose(img_norm, (2, 0, 1))[None, :, :, :]
 
-    # Inference
-    outputs = session.run([output_name], {input_name: img_input})
-    out = outputs[0]
+    # inference
+    out = session.run([output_name], {input_name: img_input})[0]
 
-    # Handle common YOLOv8 ONNX output shapes safely
-    # Typical: (1, 84, 8400) -> want (8400, 84)
+    # expected shapes:
+    # (1, 84, 8400) or (1, 8400, 84) depending on export
     if out.ndim == 3 and out.shape[0] == 1:
-        out = out[0]  # (84, 8400)
-    if out.shape[0] < out.shape[1]:
-        preds = out.T  # (8400, 84)
-    else:
-        preds = out  # already (N, 84)
+        out = out[0]
 
-    boxes_xywh, confidences, classids = [], [], []
+    # make it (N, 84)
+    if out.shape[0] == 84:
+        preds = out.T
+    else:
+        preds = out
+
+    boxes_xywh = []
+    scores = []
+    class_ids = []
 
     for pred in preds:
-        # pred: [cx, cy, w, h, ...80 class scores...]
         class_scores = pred[4:]
-        classid = int(np.argmax(class_scores))
-        conf = float(class_scores[classid])
+        cls = int(np.argmax(class_scores))
+        conf = float(class_scores[cls])
 
-        if conf > 0.4:
-            cx, cy, bw, bh = pred[:4]
+        if conf <= 0.4:
+            continue
 
-            # Scale back to original image size (because model input is 640x640)
-            x1 = (cx - bw / 2) * orig_w / 640
-            y1 = (cy - bh / 2) * orig_h / 640
-            x2 = (cx + bw / 2) * orig_w / 640
-            y2 = (cy + bh / 2) * orig_h / 640
+        cx, cy, bw, bh = pred[:4]
 
-            x1, y1, x2, y2 = clamp_box(x1, y1, x2, y2, orig_w, orig_h)
-            w_box = max(1, x2 - x1)
-            h_box = max(1, y2 - y1)
+        # scale from 640 space to original image space
+        x1 = (cx - bw / 2.0) * orig_w / 640.0
+        y1 = (cy - bh / 2.0) * orig_h / 640.0
+        x2 = (cx + bw / 2.0) * orig_w / 640.0
+        y2 = (cy + bh / 2.0) * orig_h / 640.0
 
-            boxes_xywh.append([x1, y1, w_box, h_box])  # for NMS
-            confidences.append(conf)
-            classids.append(classid)
+        x1 = clamp(x1, 0, orig_w - 1)
+        y1 = clamp(y1, 0, orig_h - 1)
+        x2 = clamp(x2, 0, orig_w - 1)
+        y2 = clamp(y2, 0, orig_h - 1)
 
-    idxs = nms_xywh(boxes_xywh, confidences, score_thresh=0.4, iou_thresh=0.5)
+        if x2 <= x1 or y2 <= y1:
+            continue
 
-    results = []
+        w_box = x2 - x1
+        h_box = y2 - y1
+
+        boxes_xywh.append([x1, y1, w_box, h_box])  # for cv2 NMSBoxes
+        scores.append(conf)
+        class_ids.append(cls)
+
+    keep = nms_xywh(boxes_xywh, scores, 0.4, 0.5)
+
+    objects = []
     labels = []
-    for i in idxs:
-        x, y, w_box, h_box = boxes_xywh[i]
-        label = CLASSES[classids[i]]
-        results.append({
+    for i in keep:
+        x, y, w_box, h_box = boxes_xywh[int(i)]
+        label = CLASSES[class_ids[int(i)]]
+
+        obj = {
             "label": label,
-            "confidence": round(float(confidences[i]), 2),
+            "confidence": round(float(scores[int(i)]), 2),
             "box": [int(x), int(y), int(x + w_box), int(y + h_box)],
             "width_px": int(w_box),
             "height_px": int(h_box)
-        }).
+        }
+        objects.append(obj)
         labels.append(label)
 
-    count_per_class = dict(Counter([r["label"] for r in results]))
+    count_per_class = dict(Counter([o["label"] for o in objects]))
 
     return jsonify(
         count_per_class=count_per_class,
-        objects=results,
+        objects=objects,
         description=list(set(labels))
     )
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, threaded=True)
