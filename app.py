@@ -11,7 +11,6 @@ MODEL_PATH = 'yolov8n.onnx'
 
 def load_session():
     if not os.path.exists(MODEL_PATH):
-        # Just log; do NOT return here
         print("Model file yolov8n.onnx not found")
         return None
     return ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
@@ -45,13 +44,13 @@ def nms(boxes, scores, score_thresh=0.4, iou_thresh=0.5):
 @app.route('/')
 def index():
     if session is None:
-        return "Model file yolov8n.onnx not found in server root.", 500
+        return "Upload yolov8n.onnx to server root", 500
     return render_template('index.html')
 
 @app.route('/detect', methods=['POST'])
 def detect():
     if session is None:
-        return jsonify(error="Model file yolov8n.onnx not found"), 500
+        return jsonify(error="Model not loaded"), 500
 
     if 'image' not in request.files:
         return jsonify(count_per_class={}, objects=[], description=[])
@@ -99,7 +98,6 @@ def detect():
             })
             labels.append(label)
 
-    from collections import Counter
     count_per_class = dict(Counter(r['label'] for r in results))
     return jsonify(count_per_class=count_per_class, objects=results, description=list(set(labels)))
 
