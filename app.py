@@ -2,16 +2,20 @@ from flask import Flask, render_template, request, jsonify
 import cv2
 import numpy as np
 import onnxruntime as ort
+import os  # <- ADD THIS
 from collections import Counter
 
 app = Flask(__name__)
 
 MODEL_PATH = 'yolov8n.onnx'
+if not os.path.exists(MODEL_PATH):
+    return jsonify(error="Model file yolov8n.onnx not found"), 404
+
 session = ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
 input_name = session.get_inputs()[0].name
 output_name = session.get_outputs()[0].name
 
-CLASSES = [
+CLASSES = [  # Full COCO classes list (unchanged)
     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
     'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
     'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
@@ -25,8 +29,9 @@ CLASSES = [
 ]
 
 def nms(boxes, scores, score_thresh=0.4, iou_thresh=0.5):
-    indices = cv2.dnn.NMSBoxes(boxes, scores, score_thresh, iou_thresh)
-    return indices
+    if len(boxes) == 0:
+        return []
+    return cv2.dnn.NMSBoxes(boxes, scores, score_thresh, iou_thresh)
 
 @app.route('/')
 def index():
@@ -38,10 +43,11 @@ def detect():
         return jsonify(count_per_class={}, objects=[], description=[])
     
     file = request.files['image']
-    img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
-    h, w = img.shape[:2]
+    nparr = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    orig_h, orig_w = img.shape[:2]
     
-    # Preprocess
+    # Preprocess to 640x640
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_norm = img_rgb.astype(np.float32) / 255.0
@@ -57,12 +63,13 @@ def detect():
         classid = np.argmax(class_scores)
         confidence = class_scores[classid]
         if confidence > 0.4:
-            cx, cy, bw, bh = pred[:4]
-            x = int((cx - bw / 2) * w / 640)
-            y = int((cy - bh / 2) * h / 640)
-            bw = int(bw * w / 640)
-            bh = int(bh * h / 640)
-            boxes.append([x, y, bw, bh])
+            cx, cy, bw, bh = pred[0:4]
+            # Scale back to original image size
+            x1 = int((cx - bw / 2) * orig_w / 640)
+            y1 = int((cy - bh / 2) * orig_h / 640)
+            x2 = int((cx + bw / 2) * orig_w / 640)
+            y2 = int((cy + bh / 2) * orig_h / 640)
+            boxes.append([x1, y1, x2 - x1, y2 - y1])  # x,y,w,h
             confidences.append(float(confidence))
             classids.append(classid)
     
@@ -71,24 +78,20 @@ def detect():
     labels = []
     if len(indices) > 0:
         for i in indices.flatten():
-            x, y, bw, bh = boxes[i]
+            x1, y1, w, h = boxes[i]
             label = CLASSES[classids[i]]
             results.append({
                 'label': label,
                 'confidence': round(confidences[i], 2),
-                'box': [x, y, x + bw, y + bh],
-                'width_px': bw,
-                'height_px': bh
+                'box': [x1, y1, x1 + w, y1 + h],
+                'width_px': w,
+                'height_px': h
             })
             labels.append(label)
     
-    count_per_class = dict(Counter([r['label'] for r in results]))
-    return jsonify(
-        count_per_class=count_per_class,
-        objects=results,
-        description=list(set(labels))
-    )
+    count_per_class = dict(Counter(r['label'] for r in results))
+    return jsonify(count_per_class=count_per_class, objects=results, description=list(set(labels)))
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, threaded=True)
