@@ -1,6 +1,5 @@
-Flask==3.0.3
-gunicorn==23.0.0
-opencv-python-headless==4.10.0.84
-onnxruntime==1.19.2
-numpy==1.26.4
-
+flask
+opencv-python-headless
+numpy
+onnxruntime
+gunicorn
