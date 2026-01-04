@@ -2,144 +2,156 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Real-Time Object Detection</title>
+    <title>Stable Object Detection</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f9fb;
-            text-align: center;
-        }
-        h1 {
-            margin: 20px;
-        }
-        button {
-            padding: 12px 25px;
-            border: none;
-            background: #6ec7a1;
-            color: white;
-            font-size: 16px;
-            border-radius: 20px;
-            cursor: pointer;
-            margin: 10px;
-        }
-        .container {
-            display: flex;
-            justify-content: center;
-            gap: 40px;
-            margin-top: 20px;
-        }
-        .box {
-            background: white;
-            padding: 15px;
-            border-radius: 15px;
-        }
-        video, canvas {
-            width: 320px;
-            height: 240px;
-            border-radius: 10px;
-        }
-        .info {
-            margin-top: 30px;
-            font-size: 18px;
-        }
-        #count {
-            background: #e8f5e8;
-            padding: 10px;
-            border-radius: 10px;
-            margin: 10px 0;
-            min-height: 20px;
-        }
+        body { font-family: Arial, sans-serif; background: #f4f9fb; text-align: center; }
+        h1 { margin: 20px; }
+        button { padding: 12px 25px; border: none; background: #6ec7a1; color: white; font-size: 16px; border-radius: 20px; cursor: pointer; margin: 10px; }
+        .container { display: flex; justify-content: center; gap: 40px; margin-top: 20px; }
+        .box { background: white; padding: 15px; border-radius: 15px; }
+        video, canvas { width: 320px; height: 240px; border-radius: 10px; }
+        .info { margin-top: 30px; font-size: 18px; }
+        #count { background: #e8f5e8; padding: 15px; border-radius: 10px; margin: 10px 0; min-height: 100px; text-align: left; max-width: 400px; margin: 20px auto; }
+        .status { font-size: 14px; color: #666; }
     </style>
 </head>
 <body>
-    <h1>REAL-TIME OBJECT DETECTION</h1>
-    <button onclick="startDetection()">Start Detection</button>
-    <button onclick="stopDetection()">Stop Detection</button>
+    <h1>🖼️ STABLE OBJECT DETECTION</h1>
+    <button onclick="startDetection()">▶️ Start Detection</button>
+    <button onclick="stopDetection()">⏹️ Stop</button>
+    <div class="status" id="status">Ready</div>
     
     <div class="container">
         <div class="box">
-            <h3>Input (Live Camera)</h3>
-            <video id="video" autoplay muted></video>
+            <h3>📹 Live Camera</h3>
+            <video id="video" autoplay muted playsinline></video>
         </div>
         <div class="box">
-            <h3>Output (Detection)</h3>
+            <h3>🎯 Detection (Stable Boxes)</h3>
             <canvas id="canvas"></canvas>
         </div>
     </div>
     
     <div class="info">
-        <p><b>Object Counts:</b></p>
-        <div id="count">No objects</div>
-        <p id="desc">No objects detected</p>
+        <div><b>📊 Counts by Class:</b></div>
+        <div id="count">No objects detected</div>
+        <div id="desc" class="status"></div>
     </div>
 
     <script>
         let video = document.getElementById('video');
         let canvas = document.getElementById('canvas');
         let ctx = canvas.getContext('2d');
-        let interval;
-        let prevObjects = [];
-        let nextId = 0;
+        let interval = null;
+        let tracks = {};
+        let trackIdCounter = 0;
+        const MAX_AGE = 45;
+        const IOU_THRESH = 0.3;
 
-        // Tracking helpers
-        function iou(box1, box2) {
-            let [x1_1, y1_1, x2_1, y2_1] = box1;
-            let [x1_2, y1_2, x2_2, y2_2] = box2;
-            let xi1 = Math.max(x1_1, x1_2);
-            let yi1 = Math.max(y1_1, y1_2);
-            let xi2 = Math.min(x2_1, x2_2);
-            let yi2 = Math.min(y2_1, y2_2);
-            let interArea = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
-            let box1Area = (x2_1 - x1_1) * (y2_1 - y1_1);
-            let box2Area = (x2_2 - x1_2) * (y2_2 - y1_2);
-            return interArea / (box1Area + box2Area - interArea + 1e-6);
+        navigator.mediaDevices.getUserMedia({ 
+            video: { width: 640, height: 480, facingMode: 'environment' } 
+        }).then(stream => {
+            video.srcObject = stream;
+            document.getElementById('status').textContent = 'Camera ready';
+        }).catch(e => {
+            document.getElementById('status').textContent = 'Camera access denied';
+        });
+
+        function iou(boxA, boxB) {
+            const [ax1, ay1, ax2, ay2] = boxA;
+            const [bx1, by1, bx2, by2] = boxB;
+            const x1 = Math.max(ax1, bx1);
+            const y1 = Math.max(ay1, by1);
+            const x2 = Math.min(ax2, bx2);
+            const y2 = Math.min(ay2, by2);
+            const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            const areaA = (ax2 - ax1) * (ay2 - ay1);
+            const areaB = (bx2 - bx1) * (by2 - by1);
+            return inter / (areaA + areaB - inter + 1e-6);
         }
 
-        function matchObjects(prev, curr) {
+        function updateTracks(currObjects) {
             let matched = [];
             let used = new Set();
-            // Match previous to current
-            for (let p of prev) {
-                let bestMatch = null;
+            
+            // Update existing
+            for (let trackId in tracks) {
+                let track = tracks[trackId];
+                track.age++;
                 let bestIou = 0;
-                for (let i = 0; i < curr.length; i++) {
+                let bestIdx = -1;
+                
+                for (let i = 0; i < currObjects.length; i++) {
                     if (used.has(i)) continue;
-                    let iouVal = iou(p.box, curr[i].box);
-                    if (iouVal > 0.5 && iouVal > bestIou) {
+                    let iouVal = iou(track.box, currObjects[i].box);
+                    if (iouVal > IOU_THRESH && iouVal > bestIou) {
                         bestIou = iouVal;
-                        bestMatch = i;
+                        bestIdx = i;
                     }
                 }
-                if (bestMatch !== null) {
-                    let obj = { ...curr[bestMatch], id: p.id };
-                    matched.push(obj);
-                    used.add(bestMatch);
+                
+                if (bestIdx !== -1) {
+                    let obj = currObjects[bestIdx];
+                    // Smooth position (0.8 previous + 0.2 new)
+                    let [tx1, ty1, tx2, ty2] = track.box;
+                    let [ox1, oy1, ox2, oy2] = obj.box;
+                    track.box = [
+                        0.8 * tx1 + 0.2 * ox1,
+                        0.8 * ty1 + 0.2 * oy1,
+                        0.8 * tx2 + 0.2 * ox2,
+                        0.8 * ty2 + 0.2 * oy2
+                    ];
+                    track.age = 0;
+                    track.hits = (track.hits || 0) + 1;
+                    
+                    matched.push({
+                        ...obj,
+                        box: track.box,
+                        trackId,
+                        stable: true,
+                        age: track.hits
+                    });
+                    used.add(bestIdx);
                 }
             }
-            // Add new objects
-            for (let i = 0; i < curr.length; i++) {
-                if (!used.has(i)) {
-                    matched.push({ ...curr[i], id: nextId++ });
-                }
+            
+            // New tracks
+            for (let i = 0; i < currObjects.length; i++) {
+                if (used.has(i)) continue;
+                let newId = trackIdCounter++;
+                tracks[newId] = {
+                    box: currObjects[i].box,
+                    age: 0,
+                    hits: 1
+                };
+                matched.push({
+                    ...currObjects[i],
+                    trackId: newId,
+                    stable: false,
+                    age: 1
+                });
             }
-            return matched.slice(0, 20);
-        }
-
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => {
-                video.srcObject = stream;
+            
+            // Cleanup
+            Object.keys(tracks).forEach(id => {
+                if (tracks[id].age > MAX_AGE) delete tracks[id];
             });
+            
+            return matched.filter(obj => obj.stable || obj.age <= 3);
+        }
 
         function startDetection() {
             if (interval) return;
-            interval = setInterval(sendFrame, 150);  // Stable frame rate
+            interval = setInterval(sendFrame, 100);
+            document.getElementById('status').textContent = 'Detecting...';
         }
 
         function stopDetection() {
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             interval = null;
-            ctx.drawImage(video, 0, 0);  // Clear boxes
-            prevObjects = [];
+            tracks = {};
+            ctx.drawImage(video, 0, 0);
+            document.getElementById('status').textContent = 'Stopped';
         }
 
         async function sendFrame() {
@@ -147,41 +159,52 @@
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0);
             
-            canvas.toBlob(async (blob) => {
-                let formData = new FormData();
+            canvas.toBlob(async blob => {
+                const formData = new FormData();
                 formData.append('image', blob);
+                
                 try {
-                    let res = await fetch('/detect', { method: 'POST', body: formData });
-                    let data = await res.json();
+                    const res = await fetch('/detect', { method: 'POST', body: formData });
+                    const data = await res.json();
                     
-                    // Per-class counts
-                    let countsHtml = '';
-                    for (let [cls, cnt] of Object.entries(data.class_counts || {})) {
-                        countsHtml += `<div style="margin: 5px 0;">${cls}: ${cnt}</div>`;
-                    }
-                    document.getElementById('count').innerHTML = countsHtml || 'No objects';
+                    // Counts
+                    let countsHtml = Object.entries(data.class_counts || {})
+                        .map(([cls, cnt]) => `<div style="font-weight:bold;color:#2d5a2d;">${cls}: ${cnt}</div>`)
+                        .join('');
+                    document.getElementById('count').innerHTML = countsHtml || '<div>No objects</div>';
+                    document.getElementById('desc').textContent = data.description?.join(', ') || '';
                     
-                    document.getElementById('desc').innerText = data.description?.length ? data.description.join(', ') : 'No objects detected';
-                    
-                    // Stable drawing
-                    let currObjects = data.objects || [];
-                    let stableObjects = matchObjects(prevObjects, currObjects);
+                    // Ultra-stable drawing
+                    const stableObjects = updateTracks(data.objects || []);
                     for (let obj of stableObjects) {
-                        let [x1, y1, x2, y2] = obj.box;
-                        ctx.strokeStyle = 'lime';
-                        ctx.lineWidth = 3;
-                        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-                        ctx.fillStyle = 'lime';
-                        ctx.font = 'bold 16px Arial';
-                        ctx.fillText(`${obj.label} ${obj.confidence?.toFixed(2) || ''}`, x1, y1 - 5);
+                        const [x1, y1, x2, y2] = obj.box;
+                        const w = x2 - x1;
+                        const h = y2 - y1;
+                        
+                        // Stable green vs new yellow
+                        ctx.strokeStyle = obj.stable ? '#00ff00' : '#ffff00';
+                        ctx.lineWidth = obj.stable ? 4 : 2;
+                        ctx.strokeRect(x1, y1, w, h);
+                        
+                        ctx.fillStyle = obj.stable ? '#006600' : '#cc8800';
+                        ctx.font = obj.stable ? 'bold 18px Arial' : '16px Arial';
+                        ctx.fillText(`${obj.label} ${obj.confidence}`, x1, y1 - 8);
+                        
                         ctx.font = '14px Arial';
-                        ctx.fillText(`${obj.width_px || (x2-x1)}x${obj.height_px || (y2-y1)}px`, x1, y2 + 18);
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillText(`${w.toFixed(0)}x${h.toFixed(0)}px`, x1, y2 + 18);
+                        
+                        // Track stability indicator
+                        if (obj.stable) {
+                            ctx.fillStyle = '#00aa00';
+                            ctx.fillRect(x1 - 5, y1 - 25, 4, 4);
+                        }
                     }
-                    prevObjects = currObjects;
+                    
                 } catch (e) {
-                    console.error('Detection error:', e);
+                    console.error(e);
                 }
-            }, 'image/jpeg', 0.8);
+            }, 'image/jpeg', 0.7);
         }
     </script>
 </body>
